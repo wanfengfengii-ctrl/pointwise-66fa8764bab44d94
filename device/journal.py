@@ -51,14 +51,28 @@ def advance_cursor(db: Connection, shift_id: str, beat: int) -> None:
     )
 
 
+def allocate_trigger_id(db: Connection) -> int:
+    """Take the next trigger number from the space shared by both shift modes."""
+    row = db.execute('''
+        SELECT COALESCE(MAX(trigger_id), 0) + 1 AS next_id FROM (
+            SELECT trigger_id FROM triggers
+            UNION ALL
+            SELECT trigger_id FROM elastic_triggers
+        )
+    ''').fetchone()
+    return row[0]
+
+
 def record_trigger(
     db: Connection, shift_id: str, ticket_id: str, probe: str, beat: int
 ) -> Command:
-    inserted = db.execute(
-        'INSERT INTO triggers (shift_id, ticket_id, probe, beat) VALUES (?, ?, ?, ?)',
-        (shift_id, ticket_id, probe, encode_integer(beat)),
+    trigger_id = allocate_trigger_id(db)
+    db.execute(
+        '''INSERT INTO triggers (trigger_id, shift_id, ticket_id, probe, beat)
+           VALUES (?, ?, ?, ?, ?)''',
+        (trigger_id, shift_id, ticket_id, probe, encode_integer(beat)),
     )
-    return Command(inserted.lastrowid, shift_id, ticket_id, probe, beat)
+    return Command(trigger_id, shift_id, ticket_id, probe, beat)
 
 
 def _restore_trigger(row: tuple[int, str, str, str, str, int | None]) -> Trigger:

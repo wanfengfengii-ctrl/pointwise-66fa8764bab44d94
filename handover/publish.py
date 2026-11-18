@@ -4,12 +4,15 @@ from handover.archive import insert_report_snapshot
 from handover.reconcile import reconcile_shift
 from handover.totals import count_statuses
 from shift.calendar import load_calendar
+from shift.modes import is_elastic_shift
 from shift.storage import write_transaction
 
 
 def publish(db: Connection, shift_id: str) -> int:
     with write_transaction(db):
         calendar = load_calendar(db, shift_id)
+        if is_elastic_shift(db, calendar.shift_id):
+            raise ValueError('elastic shifts do not issue fixed handover reports')
         rows = reconcile_shift(db, calendar.shift_id)
         totals = count_statuses(rows)
         report_id = insert_report_snapshot(db, calendar.shift_id, rows, totals)

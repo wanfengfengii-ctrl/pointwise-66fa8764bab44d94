@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from elastic_sample import check_expected_receipts, run_sample
 from handover.publish import publish
 from handover.read import get_report
 from inspection.receipts import receipt
@@ -80,6 +81,26 @@ def run_demo(sample, path):
     return actual, downstream
 
 
+def run_elastic_demo(sample, path):
+    """Play the elastic sample, then collect the same receipts after a reopen."""
+    device = ScriptedDevice()
+    beats = [row[0] for row in sample['expected_receipts']]
+    with closing(open_workspace(path)) as db:
+        commands, receipts = run_sample(db, sample, device)
+        check_expected_receipts(sample, commands, receipts)
+        signed = [receipts[beat] for beat in beats]
+        payloads = [device.commands[commands[beat].trigger_id] for beat in beats]
+    with closing(open_workspace(path)) as reopened:
+        archived = [receipt(reopened, item.receipt_id) for item in signed]
+        if archived != signed:
+            raise AssertionError('reopen changed an elastic receipt')
+    return {
+        'commands': payloads,
+        'receipts': [receipt_facts(item) for item in archived],
+        'reopened_receipt_ids': [item.receipt_id for item in archived],
+    }
+
+
 def main():
     sample_path = Path(__file__).with_name('demo-shift.json')
     sample = json.loads(sample_path.read_text(encoding='utf-8'))
@@ -130,6 +151,39 @@ def main():
         'oracle': '按样例命令顺序核对触发，手算 96−1=95、101+2=103、97+2=99，逐件确认两次交接的在途状态、原拍及原回执。',
     }
     print('POINTWISE_SCENARIO ' + json.dumps(scenario, ensure_ascii=False, sort_keys=True))
+
+    elastic_path = Path(__file__).with_name('elastic-example.json')
+    elastic = json.loads(elastic_path.read_text(encoding='utf-8'))
+    with TemporaryDirectory(prefix='elastic-sampling-demo-') as directory:
+        elastic_actual = run_elastic_demo(elastic, Path(directory) / 'lab.sqlite3')
+
+    elastic_expected = {
+        'commands': [
+            {'trigger_id': 1, 'shift_id': 'CC-elastic', 'probe': 'P', 'beat': 1},
+            {'trigger_id': 2, 'shift_id': 'CC-elastic', 'probe': 'P', 'beat': 2},
+            {'trigger_id': 3, 'shift_id': 'CC-elastic', 'probe': 'P', 'beat': 3},
+        ],
+        'receipts': [
+            [2, 1, 'CC-elastic', 'B', 'P', 1, 101, 103, 0, 'pass'],
+            [1, 2, 'CC-elastic', 'C', 'P', 2, 96, 98, 2, 'pass'],
+            [3, 3, 'CC-elastic', 'A', 'P', 3, 104, 106, 6, 'outside'],
+        ],
+        'reopened_receipt_ids': [2, 1, 3],
+    }
+    if elastic_actual != elastic_expected:
+        raise AssertionError(f'elastic outcomes differ: {elastic_actual!r}')
+    elastic_scenario = {
+        'case_id': 'elastic-v1',
+        'input': elastic,
+        'expected': elastic_expected,
+        'actual': elastic_actual,
+        'code_paths': ['shift/register.py', 'sampling/planner.py', 'sampling/elastic.py',
+                       'device/clock.py', 'device/dispatch.py', 'device/elastic.py',
+                       'device/receive.py', 'inspection/elastic.py', 'inspection/receipts.py'],
+        'oracle': '按 elastic-example.json 手算：第 2 拍回值签给 C、第 1 拍签给 B、第 3 拍签给 A；'
+                  '101+2=103、96+2=98、104+2=106；重开后按原回执号领取同一结果。',
+    }
+    print('POINTWISE_SCENARIO ' + json.dumps(elastic_scenario, ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == '__main__':

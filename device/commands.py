@@ -12,11 +12,21 @@ class Command:
     beat: int
 
 
-def device_payload(command: Command) -> dict[str, int | str]:
-    return {
+@dataclass(frozen=True)
+class ElasticCommand:
+    trigger_id: int
+    shift_id: str
+    probe: str
+    beat: int
+
+
+def device_payload(command: Command | ElasticCommand) -> dict[str, int | str]:
+    payload = {
         'trigger_id': command.trigger_id,
         'shift_id': command.shift_id,
-        'ticket_id': command.ticket_id,
         'probe': command.probe,
         'beat': command.beat,
     }
+    if isinstance(command, Command):
+        payload['ticket_id'] = command.ticket_id
+    return payload
